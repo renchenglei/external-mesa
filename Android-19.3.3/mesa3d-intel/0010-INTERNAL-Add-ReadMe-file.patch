@@ -1,0 +1,22 @@
+From e174f66b0fe85057520d163b929716c3bd960f91 Mon Sep 17 00:00:00 2001
+From: Kalyan Kondapally <kalyan.kondapally@intel.com>
+Date: Wed, 23 May 2018 15:42:46 -0700
+Subject: [PATCH 10/14] INTERNAL: Add ReadMe file.
+
+Signed-off-by: Kalyan Kondapally <kalyan.kondapally@intel.com>
+---
+ Readme.md | 2 ++
+ 1 file changed, 2 insertions(+)
+ create mode 100644 Readme.md
+
+diff --git a/Readme.md b/Readme.md
+new file mode 100644
+index 000000000000..5df295abc3a9
+--- /dev/null
++++ b/Readme.md
+@@ -0,0 +1,2 @@
++Any security related issues should be reported by following the instructions here:
++https://01.org/security
+-- 
+2.17.1
+

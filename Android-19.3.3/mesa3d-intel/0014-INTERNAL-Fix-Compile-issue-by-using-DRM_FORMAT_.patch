@@ -1,0 +1,36 @@
+From 6974e020a81f967bf047eedbd72f9f2b86be68ca Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Tue, 4 Feb 2020 21:02:49 +0800
+Subject: [PATCH 14/14] INTERNAL: Fix Compile issue by using DRM_FORMAT_*
+
+On newer mesa, we won't definine our own copy. This changes
+help to fix the compile issue caused by commit 272f9cfe6a19.
+
+Signed-off-by: Chenglei Ren <chenglei.ren@intel.com>
+---
+ src/egl/drivers/dri2/platform_android.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 320cf6d2bbf1..bcb531e1acfd 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -79,12 +79,12 @@ enum {
+ static const struct droid_yuv_format droid_yuv_formats[] = {
+    /* Native format, YCrCb, Chroma step, DRI image FourCC */
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 2, DRM_FORMAT_NV12 },
+-   { HAL_PIXEL_FORMAT_P010_INTEL,      YCbCr, 4, __DRI_IMAGE_FOURCC_P010 },
++   { HAL_PIXEL_FORMAT_P010_INTEL,      YCbCr, 4, DRM_FORMAT_P010 },
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 1, DRM_FORMAT_YUV420 },
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCrCb, 1, DRM_FORMAT_YVU420 },
+    { HAL_PIXEL_FORMAT_YV12,          YCrCb, 1, DRM_FORMAT_YVU420 },
+-   { HAL_PIXEL_FORMAT_NV12,            YCbCr, 2, __DRI_IMAGE_FOURCC_NV12 },
+-   { HAL_PIXEL_FORMAT_NV12_Y_TILED_INTEL, YCbCr, 2, __DRI_IMAGE_FOURCC_NV12 },
++   { HAL_PIXEL_FORMAT_NV12,            YCbCr, 2, DRM_FORMAT_NV12 },
++   { HAL_PIXEL_FORMAT_NV12_Y_TILED_INTEL, YCbCr, 2, DRM_FORMAT_NV12 },
+    /* HACK: See droid_create_image_from_prime_fds() and
+     * https://issuetracker.google.com/32077885. */
+    { HAL_PIXEL_FORMAT_IMPLEMENTATION_DEFINED, YCbCr, 2, DRM_FORMAT_NV12 },
+-- 
+2.17.1
+

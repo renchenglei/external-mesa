@@ -1,0 +1,505 @@
+From f61e6f460d9367d4de13936b0e6cac9e8dea4c74 Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Tue, 4 Feb 2020 20:19:54 +0800
+Subject: [PATCH 13/14] INTERNAL: Revert "FROMLIST: SQUASH: i965: SIMD32
+ selection heuristics"
+
+This patch is causing visual artifacts on Celadon home screen, which is
+troubling because it is supposed to be disabled by default. Reverting until we
+find a solution.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+---
+ src/intel/compiler/brw_compiler.h           | 11 ----
+ src/intel/compiler/brw_fs.cpp               | 66 +++------------------
+ src/intel/compiler/brw_fs.h                 |  4 --
+ src/intel/compiler/brw_fs.h.rej             | 26 --------
+ src/intel/compiler/brw_fs_generator.cpp     | 12 ----
+ src/intel/compiler/brw_fs_generator.cpp.rej | 10 ----
+ src/intel/dev/gen_debug.c                   |  1 -
+ src/intel/dev/gen_debug.c.rej               |  9 ---
+ src/intel/dev/gen_debug.h                   |  3 +-
+ src/intel/dev/gen_debug.h.rej               | 18 ------
+ src/mesa/drivers/dri/i965/brw_context.c     | 13 ----
+ src/mesa/drivers/dri/i965/brw_defines.h     |  8 +--
+ src/mesa/drivers/dri/i965/brw_defines.h.rej | 20 -------
+ src/mesa/drivers/dri/i965/intel_screen.c    | 27 ---------
+ src/util/bitscan.h                          | 25 --------
+ 15 files changed, 9 insertions(+), 244 deletions(-)
+ delete mode 100644 src/intel/compiler/brw_fs.h.rej
+ delete mode 100644 src/intel/compiler/brw_fs_generator.cpp.rej
+ delete mode 100644 src/intel/dev/gen_debug.c.rej
+ delete mode 100644 src/intel/dev/gen_debug.h.rej
+ delete mode 100644 src/mesa/drivers/dri/i965/brw_defines.h.rej
+
+diff --git a/src/intel/compiler/brw_compiler.h b/src/intel/compiler/brw_compiler.h
+index 0da42a709230..dd2de2094e71 100644
+--- a/src/intel/compiler/brw_compiler.h
++++ b/src/intel/compiler/brw_compiler.h
+@@ -38,15 +38,6 @@ struct ra_regs;
+ struct nir_shader;
+ struct brw_program;
+ 
+-struct brw_simd32_heuristics_control {
+-   bool grouped_sends_check;
+-   int max_grouped_sends;
+-   bool inst_count_check;
+-   float inst_count_ratio;
+-   bool mrt_check;
+-   int max_mrts;
+-};
+-
+ struct brw_compiler {
+    const struct gen_device_info *devinfo;
+ 
+@@ -128,8 +119,6 @@ struct brw_compiler {
+     * whether nir_opt_large_constants will be run.
+     */
+    bool supports_shader_constants;
+-
+-   struct brw_simd32_heuristics_control simd32_heuristics_control;
+ };
+ 
+ /**
+diff --git a/src/intel/compiler/brw_fs.cpp b/src/intel/compiler/brw_fs.cpp
+index b7f63270fab5..b0abb8c96026 100644
+--- a/src/intel/compiler/brw_fs.cpp
++++ b/src/intel/compiler/brw_fs.cpp
+@@ -8240,8 +8240,6 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                char **error_str)
+ {
+    const struct gen_device_info *devinfo = compiler->devinfo;
+-   bool simd16_failed = false;
+-   bool simd16_spilled = false;
+ 
+    unsigned max_subgroup_size = unlikely(INTEL_DEBUG & DEBUG_DO32) ? 32 : 16;
+ 
+@@ -8325,12 +8323,10 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                      shader_time_index16);
+       v16.import_uniforms(&v8);
+       if (!v16.run_fs(allow_spilling, use_rep_send)) {
+-         simd16_failed = true;
+          compiler->shader_perf_log(log_data,
+                                    "SIMD16 shader failed to compile: %s",
+                                    v16.fail_msg);
+       } else {
+-         simd16_spilled = v16.spilled_any_registers;
+          simd16_cfg = v16.cfg;
+          prog_data->dispatch_grf_start_reg_16 = v16.payload.num_regs;
+          prog_data->reg_blocks_16 = brw_register_blocks(v16.grf_used);
+@@ -8338,17 +8334,9 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+    }
+ 
+    /* Currently, the compiler only supports SIMD32 on SNB+ */
+-   const brw_simd32_heuristics_control *ctrl = &compiler->simd32_heuristics_control;
+-   uint64_t mrts = shader->info.outputs_written << FRAG_RESULT_DATA0;
+-
+    if (v8.max_dispatch_width >= 32 && !use_rep_send &&
+        compiler->devinfo->gen >= 6 &&
+-       (unlikely(INTEL_DEBUG & DEBUG_DO32) ||
+-        (unlikely(INTEL_DEBUG & DEBUG_HEUR32) &&
+-         !simd16_failed && !simd16_spilled &&
+-         (!ctrl->mrt_check ||
+-          (ctrl->mrt_check &&
+-          u_count_bits64(&mrts) <= ctrl->max_mrts))))) {
++       unlikely(INTEL_DEBUG & DEBUG_DO32)) {
+       /* Try a SIMD32 compile */
+       fs_visitor v32(compiler, log_data, mem_ctx, &key->base,
+                      &prog_data->base, shader, 32,
+@@ -8359,12 +8347,9 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                                    "SIMD32 shader failed to compile: %s",
+                                    v32.fail_msg);
+       } else {
+-         if (likely(!(INTEL_DEBUG & DEBUG_HEUR32)) ||
+-              v32.run_heuristic(ctrl)) {
+-            simd32_cfg = v32.cfg;
+-            prog_data->dispatch_grf_start_reg_32 = v32.payload.num_regs;
+-            prog_data->reg_blocks_32 = brw_register_blocks(v32.grf_used);
+-         }
++         simd32_cfg = v32.cfg;
++         prog_data->dispatch_grf_start_reg_32 = v32.payload.num_regs;
++         prog_data->reg_blocks_32 = brw_register_blocks(v32.grf_used);
+       }
+    }
+ 
+@@ -8439,51 +8424,14 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+    }
+ 
+    if (simd32_cfg) {
+-      uint32_t offset = g.generate_code(simd32_cfg, 32);
+-
+-      if (unlikely(INTEL_DEBUG & DEBUG_DO32) ||
+-          (unlikely(INTEL_DEBUG & DEBUG_HEUR32) &&
+-           (!simd16_cfg ||
+-            (simd16_cfg &&
+-             (!ctrl->inst_count_check ||
+-             (ctrl->inst_count_check &&
+-             (float)g.get_inst_count(32) / (float)g.get_inst_count(16) <= ctrl->inst_count_ratio)))))) {
+-         prog_data->dispatch_32 = true;
+-         prog_data->prog_offset_32 = offset;
+-         uint32_t offset = g.generate_code(simd32_cfg, 32);
+-      }
+-
++      prog_data->dispatch_32 = true;
++      prog_data->prog_offset_32 = g.generate_code(simd32_cfg, 32, stats);
++      stats = stats ? stats + 1 : NULL;
+    }
+ 
+    return g.get_assembly();
+ }
+ 
+-bool
+-fs_visitor::run_heuristic(const struct brw_simd32_heuristics_control *ctrl) {
+-   int grouped_sends = 0;
+-   int max_grouped_sends = 0;
+-   bool pass = true;
+-
+-   foreach_block_and_inst(block, fs_inst, inst, cfg) {
+-      if (inst->opcode >= SHADER_OPCODE_TEX && inst->opcode <= SHADER_OPCODE_SAMPLEINFO_LOGICAL) {
+-         ++grouped_sends;
+-      } else if (grouped_sends > 0) {
+-         if (grouped_sends > max_grouped_sends) {
+-            max_grouped_sends = grouped_sends;
+-         }
+-         grouped_sends = 0;
+-      }
+-   }
+-
+-   if (ctrl->grouped_sends_check) {
+-      if (max_grouped_sends > ctrl->max_grouped_sends) {
+-         pass = false;
+-      }
+-   }
+-
+-   return pass;
+-}
+-
+ fs_reg *
+ fs_visitor::emit_cs_work_group_id_setup()
+ {
+diff --git a/src/intel/compiler/brw_fs.h b/src/intel/compiler/brw_fs.h
+index 24b21bbc68eb..ede5b0a701cb 100644
+--- a/src/intel/compiler/brw_fs.h
++++ b/src/intel/compiler/brw_fs.h
+@@ -306,8 +306,6 @@ public:
+    virtual void dump_instructions(const char *name);
+    void dump_instruction(backend_instruction *inst);
+    void dump_instruction(backend_instruction *inst, FILE *file);
+-   
+-   bool run_heuristic(const struct brw_simd32_heuristics_control *ctrl);
+ 
+    const brw_base_prog_key *const key;
+    const struct brw_sampler_prog_key_data *key_tex;
+@@ -432,7 +430,6 @@ public:
+    void enable_debug(const char *shader_name);
+    int generate_code(const cfg_t *cfg, int dispatch_width,
+                      struct brw_compile_stats *stats);
+-   int get_inst_count(int dispatch_width);
+    const unsigned *get_assembly();
+ 
+ private:
+@@ -528,7 +525,6 @@ private:
+    struct brw_stage_prog_data * const prog_data;
+ 
+    unsigned dispatch_width; /**< 8, 16 or 32 */
+-   int inst_count[3]; /* for 8, 16 and 32 */
+ 
+    exec_list discard_halt_patches;
+    struct shader_stats shader_stats;
+diff --git a/src/intel/compiler/brw_fs.h.rej b/src/intel/compiler/brw_fs.h.rej
+deleted file mode 100644
+index 1c0a0222f7d6..000000000000
+--- a/src/intel/compiler/brw_fs.h.rej
++++ /dev/null
+@@ -1,26 +0,0 @@
+-diff a/src/intel/compiler/brw_fs.h b/src/intel/compiler/brw_fs.h	(rejected hunks)
+-@@ -300,6 +300,8 @@ public:
+-    void dump_instruction(backend_instruction *inst);
+-    void dump_instruction(backend_instruction *inst, FILE *file);
+- 
+-+   bool run_heuristic(const struct brw_simd32_heuristics_control *ctrl);
+-+
+-    const void *const key;
+-    const struct brw_sampler_prog_key_data *key_tex;
+- 
+-@@ -420,6 +422,7 @@ public:
+- 
+-    void enable_debug(const char *shader_name);
+-    int generate_code(const cfg_t *cfg, int dispatch_width);
+-+   int get_inst_count(int dispatch_width);
+-    const unsigned *get_assembly();
+- 
+- private:
+-@@ -515,6 +518,7 @@ private:
+-    struct brw_stage_prog_data * const prog_data;
+- 
+-    unsigned dispatch_width; /**< 8, 16 or 32 */
+-+   int inst_count[3]; /* for 8, 16 and 32 */
+- 
+-    exec_list discard_halt_patches;
+-    unsigned promoted_constants;
+diff --git a/src/intel/compiler/brw_fs_generator.cpp b/src/intel/compiler/brw_fs_generator.cpp
+index bc9e59eb81c3..036aa58cc7c7 100644
+--- a/src/intel/compiler/brw_fs_generator.cpp
++++ b/src/intel/compiler/brw_fs_generator.cpp
+@@ -2430,8 +2430,6 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width,
+       stats->fills = fill_count;
+    }
+ 
+-   inst_count[ffs(dispatch_width) - 4] = before_size / 16;
+-
+    return start_offset;
+ }
+ 
+@@ -2440,13 +2438,3 @@ fs_generator::get_assembly()
+ {
+    return brw_get_program(p, &prog_data->program_size);
+ }
+-
+-int
+-fs_generator::get_inst_count(int dispatch_width)
+-{
+-   if (dispatch_width == 8 || dispatch_width == 16 || dispatch_width == 32) {
+-      return inst_count[ffs(dispatch_width) - 4];
+-   } else {
+-      return 0;
+-   }
+-}
+diff --git a/src/intel/compiler/brw_fs_generator.cpp.rej b/src/intel/compiler/brw_fs_generator.cpp.rej
+deleted file mode 100644
+index a79cc835c614..000000000000
+--- a/src/intel/compiler/brw_fs_generator.cpp.rej
++++ /dev/null
+@@ -1,10 +0,0 @@
+-diff a/src/intel/compiler/brw_fs_generator.cpp b/src/intel/compiler/brw_fs_generator.cpp	(rejected hunks)
+-@@ -2297,6 +2297,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
+-                               fill_count, promoted_constants, before_size,
+-                               after_size);
+- 
+-+   inst_count[ffs(dispatch_width) - 4] = before_size / 16;
+-+
+-    return start_offset;
+- }
+- 
+diff --git a/src/intel/dev/gen_debug.c b/src/intel/dev/gen_debug.c
+index fdbce2c5a6bc..ffed3045485e 100644
+--- a/src/intel/dev/gen_debug.c
++++ b/src/intel/dev/gen_debug.c
+@@ -86,7 +86,6 @@ static const struct debug_control debug_control[] = {
+    { "color",       DEBUG_COLOR },
+    { "reemit",      DEBUG_REEMIT },
+    { "soft64",      DEBUG_SOFT64 },
+-   { "heur32",      DEBUG_HEUR32 },
+    { "tcs8",        DEBUG_TCS_EIGHT_PATCH },
+    { "bt",          DEBUG_BT },
+    { "pc",          DEBUG_PIPE_CONTROL },
+diff --git a/src/intel/dev/gen_debug.c.rej b/src/intel/dev/gen_debug.c.rej
+deleted file mode 100644
+index 3a4d2f7b68c1..000000000000
+--- a/src/intel/dev/gen_debug.c.rej
++++ /dev/null
+@@ -1,9 +0,0 @@
+-diff a/src/intel/dev/gen_debug.c b/src/intel/dev/gen_debug.c	(rejected hunks)
+-@@ -86,6 +86,7 @@ static const struct debug_control debug_control[] = {
+-    { "color",       DEBUG_COLOR },
+-    { "reemit",      DEBUG_REEMIT },
+-    { "soft64",      DEBUG_SOFT64 },
+-+   { "heur32",      DEBUG_HEUR32 },
+-    { NULL,    0 }
+- };
+- 
+diff --git a/src/intel/dev/gen_debug.h b/src/intel/dev/gen_debug.h
+index ffacaae50281..5c3e100e8dea 100644
+--- a/src/intel/dev/gen_debug.h
++++ b/src/intel/dev/gen_debug.h
+@@ -88,7 +88,6 @@ extern uint64_t INTEL_DEBUG;
+ #define DEBUG_BT                  (1ull << 44)
+ #define DEBUG_PIPE_CONTROL        (1ull << 45)
+ #define DEBUG_NO_FAST_CLEAR       (1ull << 46)
+-#define DEBUG_HEUR32              (1ull << 47)
+ 
+ /* These flags are not compatible with the disk shader cache */
+ #define DEBUG_DISK_CACHE_DISABLE_MASK DEBUG_SHADER_TIME
+@@ -97,7 +96,7 @@ extern uint64_t INTEL_DEBUG;
+ #define DEBUG_DISK_CACHE_MASK \
+    (DEBUG_NO16 | DEBUG_NO_DUAL_OBJECT_GS | DEBUG_NO8 |  DEBUG_SPILL_FS | \
+    DEBUG_SPILL_VEC4 | DEBUG_NO_COMPACTION | DEBUG_DO32 | DEBUG_SOFT64 | \
+-   DEBUG_TCS_EIGHT_PATCH | DEBUG_HEUR32)
++   DEBUG_TCS_EIGHT_PATCH)
+ 
+ #ifdef HAVE_ANDROID_PLATFORM
+ #define LOG_TAG "INTEL-MESA"
+diff --git a/src/intel/dev/gen_debug.h.rej b/src/intel/dev/gen_debug.h.rej
+deleted file mode 100644
+index ecf06b37a86c..000000000000
+--- a/src/intel/dev/gen_debug.h.rej
++++ /dev/null
+@@ -1,18 +0,0 @@
+-diff a/src/intel/dev/gen_debug.h b/src/intel/dev/gen_debug.h	(rejected hunks)
+-@@ -84,6 +84,7 @@ extern uint64_t INTEL_DEBUG;
+- #define DEBUG_COLOR               (1ull << 40)
+- #define DEBUG_REEMIT              (1ull << 41)
+- #define DEBUG_SOFT64              (1ull << 42)
+-+#define DEBUG_HEUR32              (1ull << 43)
+- 
+- /* These flags are not compatible with the disk shader cache */
+- #define DEBUG_DISK_CACHE_DISABLE_MASK DEBUG_SHADER_TIME
+-@@ -91,7 +92,7 @@ extern uint64_t INTEL_DEBUG;
+- /* These flags may affect program generation */
+- #define DEBUG_DISK_CACHE_MASK \
+-    (DEBUG_NO16 | DEBUG_NO_DUAL_OBJECT_GS | DEBUG_NO8 |  DEBUG_SPILL_FS | \
+--   DEBUG_SPILL_VEC4 | DEBUG_NO_COMPACTION | DEBUG_DO32 | DEBUG_SOFT64)
+-+   DEBUG_SPILL_VEC4 | DEBUG_NO_COMPACTION | DEBUG_DO32 | DEBUG_SOFT64 | DEBUG_HEUR32)
+- 
+- #ifdef HAVE_ANDROID_PLATFORM
+- #define LOG_TAG "INTEL-MESA"
+diff --git a/src/mesa/drivers/dri/i965/brw_context.c b/src/mesa/drivers/dri/i965/brw_context.c
+index e13cf89cffa3..ac84864f521d 100644
+--- a/src/mesa/drivers/dri/i965/brw_context.c
++++ b/src/mesa/drivers/dri/i965/brw_context.c
+@@ -908,19 +908,6 @@ brw_process_driconf_options(struct brw_context *brw)
+    ctx->Const.dri_config_options_sha1 = ralloc_array(brw, unsigned char, 20);
+    driComputeOptionsSha1(&brw->screen->optionCache,
+                          ctx->Const.dri_config_options_sha1);
+-
+-   brw->screen->compiler->simd32_heuristics_control.grouped_sends_check =
+-      driQueryOptionb(&brw->optionCache, "simd32_heuristic_grouped_check");
+-   brw->screen->compiler->simd32_heuristics_control.max_grouped_sends =
+-      driQueryOptioni(&brw->optionCache, "simd32_heuristic_grouped_sends");
+-   brw->screen->compiler->simd32_heuristics_control.inst_count_check =
+-      driQueryOptionb(&brw->optionCache, "simd32_heuristic_inst_check");
+-   brw->screen->compiler->simd32_heuristics_control.inst_count_ratio =
+-      driQueryOptionf(&brw->optionCache, "simd32_heuristic_inst_ratio");
+-   brw->screen->compiler->simd32_heuristics_control.mrt_check =
+-      driQueryOptionb(&brw->optionCache, "simd32_heuristic_mrt_check");
+-   brw->screen->compiler->simd32_heuristics_control.max_mrts =
+-      driQueryOptioni(&brw->optionCache, "simd32_heuristic_max_mrts");
+ }
+ 
+ GLboolean
+diff --git a/src/mesa/drivers/dri/i965/brw_defines.h b/src/mesa/drivers/dri/i965/brw_defines.h
+index e7a96cdf811c..76ec9a26a27a 100644
+--- a/src/mesa/drivers/dri/i965/brw_defines.h
++++ b/src/mesa/drivers/dri/i965/brw_defines.h
+@@ -1648,17 +1648,11 @@ enum brw_pixel_shader_coverage_mask_mode {
+ #define GEN10_CACHE_MODE_SS            0x0e420
+ #define GEN10_FLOAT_BLEND_OPTIMIZATION_ENABLE (1 << 4)
+ 
+-#define INSTPM                             0x20c0 /* Gen6-8 */
++#define INSTPM                             0x20c0
+ # define INSTPM_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE (1 << 6)
+-# define INSTPM_GLOBAL_DEBUG_ENABLE                    (1 << 4)
+-# define INSTPM_MEDIA_INSTRUCTION_DISABLE              (1 << 3)
+-# define INSTPM_3D_RENDERER_INSTRUCTION_DISABLE        (1 << 2)
+-# define INSTPM_3D_STATE_INSTRUCTION_DISABLE           (1 << 1)
+ 
+ #define CS_DEBUG_MODE2                     0x20d8 /* Gen9+ */
+ # define CSDBG2_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE (1 << 4)
+-# define CSDBG2_MEDIA_INSTRUCTION_DISABLE              (1 << 1)
+-# define CSDBG2_3D_RENDERER_INSTRUCTION_DISABLE        (1 << 0)
+ 
+ #define SLICE_COMMON_ECO_CHICKEN1          0x731c /* Gen9+ */
+ # define GLK_SCEC_BARRIER_MODE_GPGPU       (0 << 7)
+diff --git a/src/mesa/drivers/dri/i965/brw_defines.h.rej b/src/mesa/drivers/dri/i965/brw_defines.h.rej
+deleted file mode 100644
+index e936352be733..000000000000
+--- a/src/mesa/drivers/dri/i965/brw_defines.h.rej
++++ /dev/null
+@@ -1,20 +0,0 @@
+-diff a/src/mesa/drivers/dri/i965/brw_defines.h b/src/mesa/drivers/dri/i965/brw_defines.h	(rejected hunks)
+-@@ -1652,11 +1652,17 @@ enum brw_pixel_shader_coverage_mask_mode {
+- #define GEN10_CACHE_MODE_SS            0x0e420
+- #define GEN10_FLOAT_BLEND_OPTIMIZATION_ENABLE (1 << 4)
+- 
+--#define INSTPM                             0x20c0
+-+#define INSTPM                             0x20c0 /* Gen6-8 */
+- # define INSTPM_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE (1 << 6)
+-+# define INSTPM_GLOBAL_DEBUG_ENABLE                    (1 << 4)
+-+# define INSTPM_MEDIA_INSTRUCTION_DISABLE              (1 << 3)
+-+# define INSTPM_3D_RENDERER_INSTRUCTION_DISABLE        (1 << 2)
+-+# define INSTPM_3D_STATE_INSTRUCTION_DISABLE           (1 << 1)
+- 
+- #define CS_DEBUG_MODE2                     0x20d8 /* Gen9+ */
+- # define CSDBG2_CONSTANT_BUFFER_ADDRESS_OFFSET_DISABLE (1 << 4)
+-+# define CSDBG2_MEDIA_INSTRUCTION_DISABLE              (1 << 1)
+-+# define CSDBG2_3D_RENDERER_INSTRUCTION_DISABLE        (1 << 0)
+- 
+- #define GEN7_RPSTAT1                       0xA01C
+- #define  GEN7_RPSTAT1_CURR_GT_FREQ_SHIFT   7
+diff --git a/src/mesa/drivers/dri/i965/intel_screen.c b/src/mesa/drivers/dri/i965/intel_screen.c
+index 3e97566f5848..608e79c7e86d 100644
+--- a/src/mesa/drivers/dri/i965/intel_screen.c
++++ b/src/mesa/drivers/dri/i965/intel_screen.c
+@@ -62,33 +62,6 @@ DRI_CONF_BEGIN
+ 	    DRI_CONF_ENUM(1, "Enable reuse of all sizes of buffer objects")
+ 	 DRI_CONF_DESC_END
+       DRI_CONF_OPT_END
+-
+-      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_grouped_check, "true")
+-              DRI_CONF_DESC(en, "Enable/disable grouped texture fetch "
+-                            "check in the SIMD32 selection heuristic.")
+-      DRI_CONF_OPT_END
+-      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_grouped_sends, int, 6, "1:999")
+-             DRI_CONF_DESC(en, "How many grouped texture fetches should "
+-                            "the SIMD32 selection heuristic allow.")
+-      DRI_CONF_OPT_END
+-      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_inst_check, "true")
+-              DRI_CONF_DESC(en, "Enable/disable SIMD32/SIMD16 instruction "
+-                            "count ratio check in the SIMD32 selection "
+-                            "heuristic.")
+-      DRI_CONF_OPT_END
+-      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_inst_ratio, float, 2.3, "1:999")
+-              DRI_CONF_DESC(en, "SIMD32/SIMD16 instruction count ratio "
+-                            "the SIMD32 selection heuristic should allow.")
+-      DRI_CONF_OPT_END
+-      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_mrt_check, "true")
+-              DRI_CONF_DESC(en, "Enable/disable MRT write check in the "
+-                            "SIMD32 selection heuristic.")
+-      DRI_CONF_OPT_END
+-      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_max_mrts, int, 1, "1:8")
+-              DRI_CONF_DESC(en, "How many MRT writes should the SIMD32 "
+-                            "selection heuristic allow.")
+-      DRI_CONF_OPT_END
+-
+       DRI_CONF_MESA_NO_ERROR("false")
+       DRI_CONF_MESA_GLTHREAD("false")
+    DRI_CONF_SECTION_END
+diff --git a/src/util/bitscan.h b/src/util/bitscan.h
+index 7ce961e56bd3..895a1e7a3721 100644
+--- a/src/util/bitscan.h
++++ b/src/util/bitscan.h
+@@ -112,31 +112,6 @@ u_bit_scan64(uint64_t *mask)
+    return i;
+ }
+ 
+-/* Count bits set in mask */
+-static inline int
+-u_count_bits(unsigned *mask)
+-{
+-   unsigned v = *mask;
+-   int c;
+-   v = v - ((v >> 1) & 0x55555555);
+-   v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
+-   v = (v + (v >> 4)) & 0xF0F0F0F;
+-   c = (int)((v * 0x1010101) >> 24);
+-   return c;
+-}
+-
+-static inline int
+-u_count_bits64(uint64_t *mask)
+-{
+-   uint64_t v = *mask;
+-   int c;
+-   v = v - ((v >> 1) & 0x5555555555555555ull);
+-   v = (v & 0x3333333333333333ull) + ((v >> 2) & 0x3333333333333333ull);
+-   v = (v + (v >> 4)) & 0xF0F0F0F0F0F0F0Full;
+-   c = (int)((v * 0x101010101010101ull) >> 56);
+-   return c;
+-}
+-
+ /* Determine if an unsigned value is a power of two.
+  *
+  * \note
+-- 
+2.17.1
+

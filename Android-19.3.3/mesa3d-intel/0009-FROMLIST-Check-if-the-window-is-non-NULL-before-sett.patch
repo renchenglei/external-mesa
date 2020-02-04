@@ -1,0 +1,35 @@
+From 4e6153027782eee8e90a7d047ed780d3340674ac Mon Sep 17 00:00:00 2001
+From: samiuddi <sami.uddin.mohammad@intel.com>
+Date: Wed, 25 Apr 2018 16:23:11 +0530
+Subject: [PATCH 09/14] FROMLIST: Check if the window is non-NULL before
+ setting swap interval.
+
+This fixes crash due to NULL window when swap interval is set
+for pbuffer surface.
+
+Jira: 61995
+Test: CtsDisplayTestCases pass
+
+Signed-off-by: samiuddi <sami.uddin.mohammad@intel.com>
+
+(am from https://patchwork.freedesktop.org/patch/235697/)
+---
+ src/egl/drivers/dri2/platform_android.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 21c27b1b9036..320cf6d2bbf1 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -572,7 +572,7 @@ droid_swap_interval(_EGLDriver *drv, _EGLDisplay *disp,
+    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
+    struct ANativeWindow *window = dri2_surf->window;
+ 
+-   if (window->setSwapInterval(window, interval))
++   if (window && window->setSwapInterval(window, interval))
+       return EGL_FALSE;
+ 
+    surf->SwapInterval = interval;
+-- 
+2.17.1
+

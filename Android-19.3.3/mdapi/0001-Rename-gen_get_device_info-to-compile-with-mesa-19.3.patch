@@ -1,0 +1,30 @@
+From 159342de267248a7d102abd8e66c4cb84468a486 Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Wed, 5 Feb 2020 00:39:33 +0800
+Subject: [PATCH] Rename gen_get_device_info to compile with mesa 19.3.3
+
+Mesa 19.3.3 has renamed function gen_get_device_info to a new name
+gen_get_device_info_from_pci_id. To compile with the new name, we
+also make the changes in mdapi.
+
+Signed-off-by: Chenglei Ren <chenglei.ren@intel.com>
+---
+ .../metrics_discovery/linux/md_driver_ifc_linux_perf.cpp        | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/instrumentation/metrics_discovery/linux/md_driver_ifc_linux_perf.cpp b/instrumentation/metrics_discovery/linux/md_driver_ifc_linux_perf.cpp
+index 17e464e3b7c8..264fecbbe87f 100644
+--- a/instrumentation/metrics_discovery/linux/md_driver_ifc_linux_perf.cpp
++++ b/instrumentation/metrics_discovery/linux/md_driver_ifc_linux_perf.cpp
+@@ -2697,7 +2697,7 @@ TCompletionCode CDriverInterfaceLinuxPerf::GetMesaDeviceInfo( const gen_device_i
+     // 2. Get MesaDeviceInfo if not cached already
+     if( !isMesaDeviceInfoCached )
+     {
+-        if( !gen_get_device_info( deviceId, &cachedMesaDeviceInfo ) )
++        if( !gen_get_device_info_from_pci_id( deviceId, &cachedMesaDeviceInfo ) )
+         {
+             MD_LOG( LOG_ERROR, "ERROR: DeviceId not supported" );
+             return CC_ERROR_NOT_SUPPORTED;
+-- 
+2.17.1
+

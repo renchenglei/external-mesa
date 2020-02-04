@@ -1,0 +1,49 @@
+From 4894d68ea02803d2dd2a18a6b679aacaaddf8081 Mon Sep 17 00:00:00 2001
+From: Lin Johnson <johnson.lin@intel.com>
+Date: Sun, 15 Oct 2017 00:09:09 +0800
+Subject: [PATCH 07/14] INTERNAL: Add format P010 etc for 10bit/12bit/16bit
+ YUV420 formats
+
+Add those definition in dri2_interface.h and in intel_screen.c
+This will make P010 formats be sampleable in OpenGL
+
+Signed-off-by: Lin Johnson <johnson.lin@intel.com>
+[strassek: Paired down, much of the patch has gone upstream]
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+---
+ src/egl/drivers/dri2/platform_android.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 631705f7d72a..d3a5c1b28bf8 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -71,6 +71,7 @@ struct droid_yuv_format {
+ enum {
+    HAL_PIXEL_FORMAT_NV12_Y_TILED_INTEL = 0x100,
+    HAL_PIXEL_FORMAT_NV12 = 0x10F,
++   HAL_PIXEL_FORMAT_P010_INTEL = 0x110
+ };
+ 
+ /* The following table is used to look up a DRI image FourCC based
+@@ -78,6 +79,7 @@ enum {
+ static const struct droid_yuv_format droid_yuv_formats[] = {
+    /* Native format, YCrCb, Chroma step, DRI image FourCC */
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 2, DRM_FORMAT_NV12 },
++   { HAL_PIXEL_FORMAT_P010_INTEL,      YCbCr, 4, __DRI_IMAGE_FOURCC_P010 },
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCbCr, 1, DRM_FORMAT_YUV420 },
+    { HAL_PIXEL_FORMAT_YCbCr_420_888, YCrCb, 1, DRM_FORMAT_YVU420 },
+    { HAL_PIXEL_FORMAT_YV12,          YCrCb, 1, DRM_FORMAT_YVU420 },
+@@ -975,7 +977,8 @@ droid_create_image_from_prime_fds_yuv(_EGLDisplay *disp, _EGLContext *ctx,
+       assert(num_fds == expected_planes);
+    }
+ 
+-   if (ycbcr.chroma_step == 2) {
++   /* FIXME? we should not rely on chroma_step */
++   if (ycbcr.chroma_step == 2 || ycbcr.chroma_step == 4) {
+       /* Semi-planar Y + CbCr or Y + CrCb format. */
+       const EGLint attr_list_2plane[] = {
+          EGL_WIDTH, buf->width,
+-- 
+2.17.1
+

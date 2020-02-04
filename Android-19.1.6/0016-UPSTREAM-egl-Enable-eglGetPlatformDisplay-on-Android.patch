@@ -1,0 +1,77 @@
+From d8e38e4151e3f4b26206f5614a444d73927ac7f3 Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Fri, 28 Jun 2019 15:21:08 +0800
+Subject: [PATCH 16/42] UPSTREAM: egl: Enable eglGetPlatformDisplay on Android
+ Platform
+
+This helps to add eglGetPlatformDisplay support on Android
+Platform.
+Reviewed-by: Eric Engestrom <eric.engestrom@intel.com>
+
+(cherry picked from commit 500b45a98a6183ff8ab7bae77e0a750a3cd45adc)
+---
+ src/egl/main/eglapi.c     |  5 +++++
+ src/egl/main/egldisplay.c | 16 ++++++++++++++++
+ src/egl/main/egldisplay.h |  6 ++++++
+ 3 files changed, 27 insertions(+)
+
+diff --git a/src/egl/main/eglapi.c b/src/egl/main/eglapi.c
+index 85d94e8f6dc2..f3cf97de10cc 100644
+--- a/src/egl/main/eglapi.c
++++ b/src/egl/main/eglapi.c
+@@ -411,6 +411,11 @@ _eglGetPlatformDisplayCommon(EGLenum platform, void *native_display,
+    case EGL_PLATFORM_SURFACELESS_MESA:
+       disp = _eglGetSurfacelessDisplay(native_display, attrib_list);
+       break;
++#endif
++#ifdef HAVE_ANDROID_PLATFORM
++   case EGL_PLATFORM_ANDROID_KHR:
++      disp = _eglGetAndroidDisplay(native_display, attrib_list);
++      break;
+ #endif
+    default:
+       RETURN_EGL_ERROR(NULL, EGL_BAD_PARAMETER, NULL);
+diff --git a/src/egl/main/egldisplay.c b/src/egl/main/egldisplay.c
+index ba5f84510fe6..59e069641a6d 100644
+--- a/src/egl/main/egldisplay.c
++++ b/src/egl/main/egldisplay.c
+@@ -542,3 +542,19 @@ _eglGetSurfacelessDisplay(void *native_display,
+    return _eglFindDisplay(_EGL_PLATFORM_SURFACELESS, native_display);
+ }
+ #endif /* HAVE_SURFACELESS_PLATFORM */
++
++#ifdef HAVE_ANDROID_PLATFORM
++_EGLDisplay*
++_eglGetAndroidDisplay(void *native_display,
++                          const EGLAttrib *attrib_list)
++{
++
++   /* This platform recognizes no display attributes. */
++   if (attrib_list != NULL && attrib_list[0] != EGL_NONE) {
++      _eglError(EGL_BAD_ATTRIBUTE, "eglGetPlatformDisplay");
++      return NULL;
++   }
++
++   return _eglFindDisplay(_EGL_PLATFORM_ANDROID, native_display);
++}
++#endif /* HAVE_ANDROID_PLATFORM */
+diff --git a/src/egl/main/egldisplay.h b/src/egl/main/egldisplay.h
+index cfd0ff66d649..9f6a1d6f6aa7 100644
+--- a/src/egl/main/egldisplay.h
++++ b/src/egl/main/egldisplay.h
+@@ -301,6 +301,12 @@ _eglGetSurfacelessDisplay(void *native_display,
+                           const EGLAttrib *attrib_list);
+ #endif
+ 
++#ifdef HAVE_ANDROID_PLATFORM
++_EGLDisplay*
++_eglGetAndroidDisplay(void *native_display,
++                         const EGLAttrib *attrib_list);
++#endif
++
+ #ifdef __cplusplus
+ }
+ #endif
+-- 
+2.17.1
+

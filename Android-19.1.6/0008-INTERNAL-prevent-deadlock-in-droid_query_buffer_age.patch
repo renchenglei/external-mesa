@@ -1,0 +1,42 @@
+From 07a2f3ff694ed89ffbd99c07ddf85369681cba3e Mon Sep 17 00:00:00 2001
+From: Min He <min.he@intel.com>
+Date: Wed, 18 Apr 2018 10:34:50 +0800
+Subject: [PATCH 08/42] INTERNAL: prevent deadlock in droid_query_buffer_age
+
+To avoid blocking other EGL calls, release the display mutex before
+calling update_buffers(), which will call droid_window_dequeue_buffer().
+
+This patch fixes some failure cases in android graphics cts test.
+
+Signed-off-by: Min He <min.he@intel.com>
+Signed-off-by: Chenglei Ren <chenglei.ren@intel.com>
+---
+ src/egl/drivers/dri2/platform_android.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 3f19fadd1e6e..50200411ea8c 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -737,11 +737,18 @@ droid_query_buffer_age(_EGLDriver *drv,
+ {
+    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surface);
+ 
++   /* To avoid blocking other EGL calls, release the display mutex before
++    * we enter droid_window_dequeue_buffer() and re-acquire the mutex upon
++    * return.
++    */
++   mtx_unlock(&disp->Mutex);
+    if (update_buffers(dri2_surf) < 0) {
+       _eglError(EGL_BAD_ALLOC, "droid_query_buffer_age");
++      mtx_lock(&disp->Mutex);
+       return -1;
+    }
+ 
++   mtx_lock(&disp->Mutex);
+    return dri2_surf->back ? dri2_surf->back->age : 0;
+ }
+ 
+-- 
+2.17.1
+

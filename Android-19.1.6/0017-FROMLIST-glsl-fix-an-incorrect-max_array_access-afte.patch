@@ -1,0 +1,38 @@
+From c3e8109c01d3a774b174269152aab8f5f07bfbad Mon Sep 17 00:00:00 2001
+From: Andrii Simiklit <andrii.simiklit@globallogic.com>
+Date: Tue, 5 Mar 2019 17:38:20 +0200
+Subject: [PATCH 17/42] FROMLIST: glsl: fix an incorrect max_array_access after
+ optimization of ssbo/ubo
+
+This is needed to fix these tests:
+piglit.spec.arb_shader_storage_buffer_object.compiler.unused-array-element_frag
+piglit.spec.arb_shader_storage_buffer_object.compiler.unused-array-element_comp
+
+Fixes: 8cf1333b "glsl: link uniform block arrays of arrays"
+Bugzilla: https://bugs.freedesktop.org/show_bug.cgi?id=109532
+Reported-By: Ilia Mirkin <imirkin@alum.mit.edu>
+Tested-by: Fritz Koenig <frkoenig@google.com>
+Signed-off-by: Andrii Simiklit <andrii.simiklit@globallogic.com>
+
+TEST=[CTS 9.0_r8} dEQP-GLES31.functional.ssbo.layout.random.all_per_block_buffers#18
+(am from https://gitlab.freedesktop.org/mesa/mesa/merge_requests/332)
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+---
+ src/compiler/glsl/link_uniform_blocks.cpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/compiler/glsl/link_uniform_blocks.cpp b/src/compiler/glsl/link_uniform_blocks.cpp
+index 45f1c0fe98d7..715118cf5099 100644
+--- a/src/compiler/glsl/link_uniform_blocks.cpp
++++ b/src/compiler/glsl/link_uniform_blocks.cpp
+@@ -440,6 +440,7 @@ link_uniform_blocks(void *mem_ctx,
+            GLSL_INTERFACE_PACKING_PACKED)) {
+          b->type = resize_block_array(b->type, b->array);
+          b->var->type = b->type;
++         b->var->data.max_array_access = b->type->length - 1;
+       }
+ 
+       block_size.num_active_uniforms = 0;
+-- 
+2.17.1
+

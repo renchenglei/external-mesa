@@ -1,0 +1,65 @@
+From 6c51a73494256e7d9e4cdd07afad68c8ff09ee32 Mon Sep 17 00:00:00 2001
+From: Kevin Strasser <kevin.strasser@intel.com>
+Date: Mon, 15 Jul 2019 13:36:31 -0700
+Subject: [PATCH 23/42] UPSTREAM: gallium: Use consistent approach for config
+ format filtering
+
+rgb10 uses an 'if(allowed) continue' approach, do the same for rgba_ordering.
+
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+Reviewed-by: Emil Velikov <emil.l.velikov@gmail.com>
+(cherry picked from commit 9328e7c04cd86c0eff00fb91061a0fdbf7b1e149)
+---
+ src/gallium/state_trackers/dri/dri_screen.c | 17 +++++++++--------
+ 1 file changed, 9 insertions(+), 8 deletions(-)
+
+diff --git a/src/gallium/state_trackers/dri/dri_screen.c b/src/gallium/state_trackers/dri/dri_screen.c
+index 82a0988a634f..121dd2391f01 100644
+--- a/src/gallium/state_trackers/dri/dri_screen.c
++++ b/src/gallium/state_trackers/dri/dri_screen.c
+@@ -166,6 +166,7 @@ dri_fill_in_modes(struct dri_screen *screen)
+    struct pipe_screen *p_screen = screen->base.screen;
+    boolean pf_z16, pf_x8z24, pf_z24x8, pf_s8z24, pf_z24s8, pf_z32;
+    boolean mixed_color_depth;
++   boolean allow_rgba_ordering;
+    boolean allow_rgb10;
+ 
+    static const GLenum back_buffer_modes[] = {
+@@ -183,6 +184,7 @@ dri_fill_in_modes(struct dri_screen *screen)
+       depth_buffer_factor = 1;
+    }
+ 
++   allow_rgba_ordering = dri_loader_get_cap(screen, DRI_LOADER_CAP_RGBA_ORDERING);
+    allow_rgb10 = driQueryOptionb(&screen->dev->option_cache, "allow_rgb10_configs");
+ 
+    msaa_samples_max = (screen->st_api->feature_mask & ST_API_FEATURE_MS_VISUALS_MASK)
+@@ -231,19 +233,18 @@ dri_fill_in_modes(struct dri_screen *screen)
+ 
+    assert(ARRAY_SIZE(mesa_formats) == ARRAY_SIZE(pipe_formats));
+ 
+-   /* Expose only BGRA ordering if the loader doesn't support RGBA ordering. */
+-   unsigned num_formats;
+-   if (dri_loader_get_cap(screen, DRI_LOADER_CAP_RGBA_ORDERING))
+-      num_formats = ARRAY_SIZE(mesa_formats);
+-   else
+-      num_formats = ARRAY_SIZE(mesa_formats) - 2; /* all - RGBA_ORDERING formats */
+-
+    /* Add configs. */
+-   for (format = 0; format < num_formats; format++) {
++   for (format = 0; format < ARRAY_SIZE(mesa_formats); format++) {
+       __DRIconfig **new_configs = NULL;
+       unsigned num_msaa_modes = 0; /* includes a single-sample mode */
+       uint8_t msaa_modes[MSAA_VISUAL_MAX_SAMPLES];
+ 
++      /* Expose only BGRA ordering if the loader doesn't support RGBA ordering. */
++      if (!allow_rgba_ordering &&
++          (mesa_formats[format] == MESA_FORMAT_R8G8B8A8_UNORM ||
++           mesa_formats[format] == MESA_FORMAT_R8G8B8X8_UNORM))
++         continue;
++
+       if (!allow_rgb10 &&
+           (mesa_formats[format] == MESA_FORMAT_B10G10R10A2_UNORM ||
+            mesa_formats[format] == MESA_FORMAT_B10G10R10X2_UNORM ||
+-- 
+2.17.1
+

@@ -1,0 +1,433 @@
+From 3c164632c918ccdea47d8ffb702dd589caf4bc91 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Toni=20L=C3=B6nnberg?= <toni.lonnberg@intel.com>
+Date: Mon, 15 Oct 2018 16:19:52 +0300
+Subject: [PATCH 14/42] FROMLIST: SQUASH: i965: SIMD32 selection heuristics
+
+(cover letter https://patchwork.freedesktop.org/series/51006/)
+
+FROMLIST: i965: SIMD32 heuristics debug flag
+
+Added a new DEBUG_HEUR32 flag to INTEL_DEBUG flags for enabling SIMD32
+selection heuristics.
+
+(am from https://patchwork.freedesktop.org/patch/256764/)
+
+FROMLIST: i965: SIMD32 heuristics control data
+
+Added a new structure for holding SIMD32 heuristics control data. The
+control data itself will be fetched from drirc.
+
+(am from https://patchwork.freedesktop.org/patch/256806/)
+
+FROMLIST: i965: SIMD32 heuristics control data from drirc
+
+To be able to test the heuristics with different parameters, they can be
+controlled via environment variables through drirc.
+
+(am from https://patchwork.freedesktop.org/patch/256788/)
+
+FROMLIST: mesa: Helper functions for counting set bits in a mask
+
+(am from https://patchwork.freedesktop.org/patch/256765/)
+
+FROMLIST: i965/fs: Save the instruction count of each dispatch width
+
+The SIMD32 selection heuristics will use this information for deciding whether
+SIMD32 shaders should be used.
+
+(am from https://patchwork.freedesktop.org/patch/256793/)
+
+FROMLIST: i965/fs: SIMD32 selection heuristic based on grouped texture fetches
+
+The function goes through the compiled shader and checks how many grouped
+texture fetches there are. This is a simple heuristic which gets rid of most
+of the regressions when enabling SIMD32 shaders but still retains some of
+the benefits.
+
+(am from https://patchwork.freedesktop.org/patch/256798/)
+
+FROMLIST: i965/fs: Enable all SIMD32 heuristics
+
+There are three simple heuristics for SIMD32 shader enabling:
+
+- How many MRTs does the shader write into?
+- How many grouped texture fetches does the shader have?
+- How many instructions does the SIMD32 shader have compared to the SIMD16
+   shader?
+
+For testing purposes, the heuristics can be controlled via these environment
+variables:
+
+simd32_heuristic_mrt_check
+- Enables MRT write check
+- Default: true
+
+simd32_heuristic_max_mrts
+- How many MRT writes the heuristic allows
+- Default: 1
+
+simd32_heuristic_grouped_check
+- Enables grouped texture fetch check
+- Default: true
+
+simd32_heuristic_grouped_sends
+- How many grouped texture fetches the heuristic allows
+- Default: 6
+
+simd32_heuristic_inst_check
+- Enables SIMD32 vs. SIMD16 instruction count check
+- Default: true
+
+simd32_heuristic_inst_ratio
+- SIMD32 vs. SIMD16 instruction count ratio the heuristic allows
+- Default: 2.3
+
+SIMD32 shaders will not be compiled also when SIMD16 compilation fails or
+spills.
+
+(am from https://patchwork.freedesktop.org/patch/256766/)
+---
+ src/intel/compiler/brw_compiler.h        | 11 +++++
+ src/intel/compiler/brw_fs.cpp            | 63 +++++++++++++++++++++---
+ src/intel/compiler/brw_fs.h              |  4 ++
+ src/intel/compiler/brw_fs_generator.cpp  | 12 +++++
+ src/intel/dev/gen_debug.c                |  1 +
+ src/intel/dev/gen_debug.h                |  3 +-
+ src/mesa/drivers/dri/i965/brw_context.c  | 13 +++++
+ src/mesa/drivers/dri/i965/intel_screen.c | 27 ++++++++++
+ src/util/bitscan.h                       | 25 ++++++++++
+ 9 files changed, 152 insertions(+), 7 deletions(-)
+
+diff --git a/src/intel/compiler/brw_compiler.h b/src/intel/compiler/brw_compiler.h
+index 332789d7809b..9525966fa82d 100644
+--- a/src/intel/compiler/brw_compiler.h
++++ b/src/intel/compiler/brw_compiler.h
+@@ -38,6 +38,15 @@ struct ra_regs;
+ struct nir_shader;
+ struct brw_program;
+ 
++struct brw_simd32_heuristics_control {
++   bool grouped_sends_check;
++   int max_grouped_sends;
++   bool inst_count_check;
++   float inst_count_ratio;
++   bool mrt_check;
++   int max_mrts;
++};
++
+ struct brw_compiler {
+    const struct gen_device_info *devinfo;
+ 
+@@ -118,6 +127,8 @@ struct brw_compiler {
+     * whether nir_opt_large_constants will be run.
+     */
+    bool supports_shader_constants;
++
++   struct brw_simd32_heuristics_control simd32_heuristics_control;
+ };
+ 
+ /**
+diff --git a/src/intel/compiler/brw_fs.cpp b/src/intel/compiler/brw_fs.cpp
+index f7e37d57b22d..a713d4e1d9e1 100644
+--- a/src/intel/compiler/brw_fs.cpp
++++ b/src/intel/compiler/brw_fs.cpp
+@@ -7939,6 +7939,8 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                char **error_str)
+ {
+    const struct gen_device_info *devinfo = compiler->devinfo;
++   bool simd16_failed = false;
++   bool simd16_spilled = false;
+ 
+    shader = brw_nir_apply_sampler_key(shader, compiler, &key->tex, true);
+    brw_nir_lower_fs_inputs(shader, devinfo, key);
+@@ -8004,10 +8006,12 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                      shader_time_index16);
+       v16.import_uniforms(&v8);
+       if (!v16.run_fs(allow_spilling, use_rep_send)) {
++         simd16_failed = true;
+          compiler->shader_perf_log(log_data,
+                                    "SIMD16 shader failed to compile: %s",
+                                    v16.fail_msg);
+       } else {
++         simd16_spilled = v16.spilled_any_registers;
+          simd16_cfg = v16.cfg;
+          prog_data->dispatch_grf_start_reg_16 = v16.payload.num_regs;
+          prog_data->reg_blocks_16 = brw_register_blocks(v16.grf_used);
+@@ -8015,9 +8019,17 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+    }
+ 
+    /* Currently, the compiler only supports SIMD32 on SNB+ */
++   const brw_simd32_heuristics_control *ctrl = &compiler->simd32_heuristics_control;
++   uint64_t mrts = shader->info.outputs_written << FRAG_RESULT_DATA0;
++
+    if (v8.max_dispatch_width >= 32 && !use_rep_send &&
+        compiler->devinfo->gen >= 6 &&
+-       unlikely(INTEL_DEBUG & DEBUG_DO32)) {
++       (unlikely(INTEL_DEBUG & DEBUG_DO32) ||
++        (unlikely(INTEL_DEBUG & DEBUG_HEUR32) &&
++         !simd16_failed && !simd16_spilled &&
++         (!ctrl->mrt_check ||
++          (ctrl->mrt_check &&
++          u_count_bits64(&mrts) <= ctrl->max_mrts))))) {
+       /* Try a SIMD32 compile */
+       fs_visitor v32(compiler, log_data, mem_ctx, key,
+                      &prog_data->base, prog, shader, 32,
+@@ -8028,9 +8040,12 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+                                    "SIMD32 shader failed to compile: %s",
+                                    v32.fail_msg);
+       } else {
+-         simd32_cfg = v32.cfg;
+-         prog_data->dispatch_grf_start_reg_32 = v32.payload.num_regs;
+-         prog_data->reg_blocks_32 = brw_register_blocks(v32.grf_used);
++         if (likely(!(INTEL_DEBUG & DEBUG_HEUR32)) ||
++              v32.run_heuristic(ctrl)) {
++            simd32_cfg = v32.cfg;
++            prog_data->dispatch_grf_start_reg_32 = v32.payload.num_regs;
++            prog_data->reg_blocks_32 = brw_register_blocks(v32.grf_used);
++         }
+       }
+    }
+ 
+@@ -8109,13 +8124,49 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
+    }
+ 
+    if (simd32_cfg) {
+-      prog_data->dispatch_32 = true;
+-      prog_data->prog_offset_32 = g.generate_code(simd32_cfg, 32);
++      uint32_t offset = g.generate_code(simd32_cfg, 32);
++
++      if (unlikely(INTEL_DEBUG & DEBUG_DO32) ||
++          (unlikely(INTEL_DEBUG & DEBUG_HEUR32) &&
++           (!simd16_cfg ||
++            (simd16_cfg &&
++             (!ctrl->inst_count_check ||
++             (ctrl->inst_count_check &&
++             (float)g.get_inst_count(32) / (float)g.get_inst_count(16) <= ctrl->inst_count_ratio)))))) {
++         prog_data->dispatch_32 = true;
++         prog_data->prog_offset_32 = offset;
++      }
+    }
+ 
+    return g.get_assembly();
+ }
+ 
++bool
++fs_visitor::run_heuristic(const struct brw_simd32_heuristics_control *ctrl) {
++   int grouped_sends = 0;
++   int max_grouped_sends = 0;
++   bool pass = true;
++
++   foreach_block_and_inst(block, fs_inst, inst, cfg) {
++      if (inst->opcode >= SHADER_OPCODE_TEX && inst->opcode <= SHADER_OPCODE_SAMPLEINFO_LOGICAL) {
++         ++grouped_sends;
++      } else if (grouped_sends > 0) {
++         if (grouped_sends > max_grouped_sends) {
++            max_grouped_sends = grouped_sends;
++         }
++         grouped_sends = 0;
++      }
++   }
++
++   if (ctrl->grouped_sends_check) {
++      if (max_grouped_sends > ctrl->max_grouped_sends) {
++         pass = false;
++      }
++   }
++
++   return pass;
++}
++
+ fs_reg *
+ fs_visitor::emit_cs_work_group_id_setup()
+ {
+diff --git a/src/intel/compiler/brw_fs.h b/src/intel/compiler/brw_fs.h
+index f05a9e0625ac..7697619ac03f 100644
+--- a/src/intel/compiler/brw_fs.h
++++ b/src/intel/compiler/brw_fs.h
+@@ -300,6 +300,8 @@ public:
+    void dump_instruction(backend_instruction *inst);
+    void dump_instruction(backend_instruction *inst, FILE *file);
+ 
++   bool run_heuristic(const struct brw_simd32_heuristics_control *ctrl);
++
+    const void *const key;
+    const struct brw_sampler_prog_key_data *key_tex;
+ 
+@@ -420,6 +422,7 @@ public:
+ 
+    void enable_debug(const char *shader_name);
+    int generate_code(const cfg_t *cfg, int dispatch_width);
++   int get_inst_count(int dispatch_width);
+    const unsigned *get_assembly();
+ 
+ private:
+@@ -515,6 +518,7 @@ private:
+    struct brw_stage_prog_data * const prog_data;
+ 
+    unsigned dispatch_width; /**< 8, 16 or 32 */
++   int inst_count[3]; /* for 8, 16 and 32 */
+ 
+    exec_list discard_halt_patches;
+    unsigned promoted_constants;
+diff --git a/src/intel/compiler/brw_fs_generator.cpp b/src/intel/compiler/brw_fs_generator.cpp
+index 67740c783f19..af576c6704e8 100644
+--- a/src/intel/compiler/brw_fs_generator.cpp
++++ b/src/intel/compiler/brw_fs_generator.cpp
+@@ -2297,6 +2297,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
+                               fill_count, promoted_constants, before_size,
+                               after_size);
+ 
++   inst_count[ffs(dispatch_width) - 4] = before_size / 16;
++
+    return start_offset;
+ }
+ 
+@@ -2305,3 +2307,13 @@ fs_generator::get_assembly()
+ {
+    return brw_get_program(p, &prog_data->program_size);
+ }
++
++int
++fs_generator::get_inst_count(int dispatch_width)
++{
++   if (dispatch_width == 8 || dispatch_width == 16 || dispatch_width == 32) {
++      return inst_count[ffs(dispatch_width) - 4];
++   } else {
++      return 0;
++   }
++}
+\ No newline at end of file
+diff --git a/src/intel/dev/gen_debug.c b/src/intel/dev/gen_debug.c
+index b0d0d1a574a9..84d23e3290fa 100644
+--- a/src/intel/dev/gen_debug.c
++++ b/src/intel/dev/gen_debug.c
+@@ -86,6 +86,7 @@ static const struct debug_control debug_control[] = {
+    { "color",       DEBUG_COLOR },
+    { "reemit",      DEBUG_REEMIT },
+    { "soft64",      DEBUG_SOFT64 },
++   { "heur32",      DEBUG_HEUR32 },
+    { NULL,    0 }
+ };
+ 
+diff --git a/src/intel/dev/gen_debug.h b/src/intel/dev/gen_debug.h
+index e4dabc67f8d4..b64f211f41ba 100644
+--- a/src/intel/dev/gen_debug.h
++++ b/src/intel/dev/gen_debug.h
+@@ -84,6 +84,7 @@ extern uint64_t INTEL_DEBUG;
+ #define DEBUG_COLOR               (1ull << 40)
+ #define DEBUG_REEMIT              (1ull << 41)
+ #define DEBUG_SOFT64              (1ull << 42)
++#define DEBUG_HEUR32              (1ull << 43)
+ 
+ /* These flags are not compatible with the disk shader cache */
+ #define DEBUG_DISK_CACHE_DISABLE_MASK DEBUG_SHADER_TIME
+@@ -91,7 +92,7 @@ extern uint64_t INTEL_DEBUG;
+ /* These flags may affect program generation */
+ #define DEBUG_DISK_CACHE_MASK \
+    (DEBUG_NO16 | DEBUG_NO_DUAL_OBJECT_GS | DEBUG_NO8 |  DEBUG_SPILL_FS | \
+-   DEBUG_SPILL_VEC4 | DEBUG_NO_COMPACTION | DEBUG_DO32 | DEBUG_SOFT64)
++   DEBUG_SPILL_VEC4 | DEBUG_NO_COMPACTION | DEBUG_DO32 | DEBUG_SOFT64 | DEBUG_HEUR32)
+ 
+ #ifdef HAVE_ANDROID_PLATFORM
+ #define LOG_TAG "INTEL-MESA"
+diff --git a/src/mesa/drivers/dri/i965/brw_context.c b/src/mesa/drivers/dri/i965/brw_context.c
+index f6cf82d66947..2630fe1f8f12 100644
+--- a/src/mesa/drivers/dri/i965/brw_context.c
++++ b/src/mesa/drivers/dri/i965/brw_context.c
+@@ -914,6 +914,19 @@ brw_process_driconf_options(struct brw_context *brw)
+    ctx->Const.dri_config_options_sha1 = ralloc_array(brw, unsigned char, 20);
+    driComputeOptionsSha1(&brw->screen->optionCache,
+                          ctx->Const.dri_config_options_sha1);
++
++   brw->screen->compiler->simd32_heuristics_control.grouped_sends_check =
++      driQueryOptionb(&brw->optionCache, "simd32_heuristic_grouped_check");
++   brw->screen->compiler->simd32_heuristics_control.max_grouped_sends =
++      driQueryOptioni(&brw->optionCache, "simd32_heuristic_grouped_sends");
++   brw->screen->compiler->simd32_heuristics_control.inst_count_check =
++      driQueryOptionb(&brw->optionCache, "simd32_heuristic_inst_check");
++   brw->screen->compiler->simd32_heuristics_control.inst_count_ratio =
++      driQueryOptionf(&brw->optionCache, "simd32_heuristic_inst_ratio");
++   brw->screen->compiler->simd32_heuristics_control.mrt_check =
++      driQueryOptionb(&brw->optionCache, "simd32_heuristic_mrt_check");
++   brw->screen->compiler->simd32_heuristics_control.max_mrts =
++      driQueryOptioni(&brw->optionCache, "simd32_heuristic_max_mrts");
+ }
+ 
+ GLboolean
+diff --git a/src/mesa/drivers/dri/i965/intel_screen.c b/src/mesa/drivers/dri/i965/intel_screen.c
+index 2bc2e41178de..e6879e1f2ac1 100644
+--- a/src/mesa/drivers/dri/i965/intel_screen.c
++++ b/src/mesa/drivers/dri/i965/intel_screen.c
+@@ -62,6 +62,33 @@ DRI_CONF_BEGIN
+ 	    DRI_CONF_ENUM(1, "Enable reuse of all sizes of buffer objects")
+ 	 DRI_CONF_DESC_END
+       DRI_CONF_OPT_END
++
++      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_grouped_check, "true")
++              DRI_CONF_DESC(en, "Enable/disable grouped texture fetch "
++                            "check in the SIMD32 selection heuristic.")
++      DRI_CONF_OPT_END
++      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_grouped_sends, int, 6, "1:999")
++             DRI_CONF_DESC(en, "How many grouped texture fetches should "
++                            "the SIMD32 selection heuristic allow.")
++      DRI_CONF_OPT_END
++      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_inst_check, "true")
++              DRI_CONF_DESC(en, "Enable/disable SIMD32/SIMD16 instruction "
++                            "count ratio check in the SIMD32 selection "
++                            "heuristic.")
++      DRI_CONF_OPT_END
++      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_inst_ratio, float, 2.3, "1:999")
++              DRI_CONF_DESC(en, "SIMD32/SIMD16 instruction count ratio "
++                            "the SIMD32 selection heuristic should allow.")
++      DRI_CONF_OPT_END
++      DRI_CONF_OPT_BEGIN_B(simd32_heuristic_mrt_check, "true")
++              DRI_CONF_DESC(en, "Enable/disable MRT write check in the "
++                            "SIMD32 selection heuristic.")
++      DRI_CONF_OPT_END
++      DRI_CONF_OPT_BEGIN_V(simd32_heuristic_max_mrts, int, 1, "1:8")
++              DRI_CONF_DESC(en, "How many MRT writes should the SIMD32 "
++                            "selection heuristic allow.")
++      DRI_CONF_OPT_END
++
+       DRI_CONF_MESA_NO_ERROR("false")
+       DRI_CONF_MESA_GLTHREAD("false")
+    DRI_CONF_SECTION_END
+diff --git a/src/util/bitscan.h b/src/util/bitscan.h
+index dc89ac93f28b..cdfecafaf013 100644
+--- a/src/util/bitscan.h
++++ b/src/util/bitscan.h
+@@ -112,6 +112,31 @@ u_bit_scan64(uint64_t *mask)
+    return i;
+ }
+ 
++/* Count bits set in mask */
++static inline int
++u_count_bits(unsigned *mask)
++{
++   unsigned v = *mask;
++   int c;
++   v = v - ((v >> 1) & 0x55555555);
++   v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
++   v = (v + (v >> 4)) & 0xF0F0F0F;
++   c = (int)((v * 0x1010101) >> 24);
++   return c;
++}
++
++static inline int
++u_count_bits64(uint64_t *mask)
++{
++   uint64_t v = *mask;
++   int c;
++   v = v - ((v >> 1) & 0x5555555555555555ull);
++   v = (v & 0x3333333333333333ull) + ((v >> 2) & 0x3333333333333333ull);
++   v = (v + (v >> 4)) & 0xF0F0F0F0F0F0F0Full;
++   c = (int)((v * 0x101010101010101ull) >> 56);
++   return c;
++}
++
+ /* Determine if an unsigned value is a power of two.
+  *
+  * \note
+-- 
+2.17.1
+

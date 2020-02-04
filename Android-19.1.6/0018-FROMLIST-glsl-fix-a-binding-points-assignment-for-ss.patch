@@ -1,0 +1,182 @@
+From 8010aa8e67237028300fc68e59c0fbfc75bc7fc8 Mon Sep 17 00:00:00 2001
+From: Andrii Simiklit <andrii.simiklit@globallogic.com>
+Date: Tue, 5 Mar 2019 17:58:53 +0200
+Subject: [PATCH 18/42] FROMLIST: glsl: fix a binding points assignment for
+ ssbo/ubo arrays
+
+This is needed to be in agreement with spec requirements:
+https://github.com/KhronosGroup/OpenGL-API/issues/46
+
+Piers Daniell:
+   "We discussed this in the OpenGL/ES working group meeting
+    and agreed that eliminating unused elements from the interface
+    block array is not desirable. There is no statement in the spec
+    that this takes place and it would be highly implementation
+    dependent if it happens. If the application has an "interface"
+    in the shader they need to match up with the API it would be
+    quite confusing to have the binding point get compacted.
+    So the answer is no, the binding points aren't affected by
+    unused elements in the interface block array."
+
+v2: - 'original_dim_size' field moved above to keep
+      the struct packed better on 64-bit
+    - added a comment for 'total_num_array_elements' field
+    - fixed a binding point calculations for SSBOs array of arrays
+          ( Ian Romanick <ian.d.romanick@intel.com> )
+    - fixed binding point calculations for non-packed SSBOs
+
+Fixes: 8cf1333b "glsl: link uniform block arrays of arrays"
+Bugzilla: https://bugs.freedesktop.org/show_bug.cgi?id=109532
+Reported-By: Ilia Mirkin <imirkin@alum.mit.edu>
+Tested-by: Fritz Koenig <frkoenig@google.com>
+Signed-off-by: Andrii Simiklit <andrii.simiklit@globallogic.com>
+
+TEST=[CTS 9.0_r8} dEQP-GLES31.functional.ssbo.layout.random.all_per_block_buffers#18
+(am from https://gitlab.freedesktop.org/mesa/mesa/merge_requests/332)
+Signed-off-by: Kevin Strasser <kevin.strasser@intel.com>
+---
+ .../link_uniform_block_active_visitor.cpp     |  3 +++
+ .../glsl/link_uniform_block_active_visitor.h  |  9 +++++++
+ src/compiler/glsl/link_uniform_blocks.cpp     | 25 ++++++++++---------
+ 3 files changed, 25 insertions(+), 12 deletions(-)
+
+diff --git a/src/compiler/glsl/link_uniform_block_active_visitor.cpp b/src/compiler/glsl/link_uniform_block_active_visitor.cpp
+index 368981852c06..5bf0a8bc5a71 100644
+--- a/src/compiler/glsl/link_uniform_block_active_visitor.cpp
++++ b/src/compiler/glsl/link_uniform_block_active_visitor.cpp
+@@ -103,6 +103,8 @@ process_arrays(void *mem_ctx, ir_dereference_array *ir,
+       if (*ub_array_ptr == NULL) {
+          *ub_array_ptr = rzalloc(mem_ctx, struct uniform_block_array_elements);
+          (*ub_array_ptr)->ir = ir;
++         (*ub_array_ptr)->total_num_array_elements =
++                      ir->array->type->arrays_of_arrays_size();
+       }
+ 
+       struct uniform_block_array_elements *ub_array = *ub_array_ptr;
+@@ -199,6 +201,7 @@ link_uniform_block_active_visitor::visit(ir_variable *var)
+                                              (*ub_array)->array_elements,
+                                              unsigned,
+                                              (*ub_array)->num_array_elements);
++      (*ub_array)->total_num_array_elements = type->arrays_of_arrays_size();
+ 
+       for (unsigned i = 0; i < (*ub_array)->num_array_elements; i++) {
+          (*ub_array)->array_elements[i] = i;
+diff --git a/src/compiler/glsl/link_uniform_block_active_visitor.h b/src/compiler/glsl/link_uniform_block_active_visitor.h
+index fbac65d5b674..462a2efdb9be 100644
+--- a/src/compiler/glsl/link_uniform_block_active_visitor.h
++++ b/src/compiler/glsl/link_uniform_block_active_visitor.h
+@@ -30,6 +30,15 @@
+ struct uniform_block_array_elements {
+    unsigned *array_elements;
+    unsigned num_array_elements;
++   /**
++    * Size of the array before array-trimming optimizations.
++    *
++    * Locations are only assigned to active array elements, but the location
++    * values are calculated as if all elements are active. The total number
++    * of elements in an array including the elements in arrays of arrays before
++    * inactive elements are removed is needed to be perform that calculation.
++    */
++   unsigned total_num_array_elements;
+ 
+    ir_dereference_array *ir;
+ 
+diff --git a/src/compiler/glsl/link_uniform_blocks.cpp b/src/compiler/glsl/link_uniform_blocks.cpp
+index 715118cf5099..85a246cb7c46 100644
+--- a/src/compiler/glsl/link_uniform_blocks.cpp
++++ b/src/compiler/glsl/link_uniform_blocks.cpp
+@@ -222,7 +222,7 @@ static void process_block_array_leaf(const char *name, gl_uniform_block *blocks,
+                                      gl_uniform_buffer_variable *variables,
+                                      const struct link_uniform_block_active *const b,
+                                      unsigned *block_index,
+-                                     unsigned *binding_offset,
++                                     unsigned binding_offset,
+                                      unsigned linearized_index,
+                                      struct gl_context *ctx,
+                                      struct gl_shader_program *prog);
+@@ -237,25 +237,28 @@ process_block_array(struct uniform_block_array_elements *ub_array, char **name,
+                     size_t name_length, gl_uniform_block *blocks,
+                     ubo_visitor *parcel, gl_uniform_buffer_variable *variables,
+                     const struct link_uniform_block_active *const b,
+-                    unsigned *block_index, unsigned *binding_offset,
++                    unsigned *block_index, unsigned binding_offset,
+                     struct gl_context *ctx, struct gl_shader_program *prog,
+                     unsigned first_index)
+ {
+    for (unsigned j = 0; j < ub_array->num_array_elements; j++) {
+       size_t new_length = name_length;
+ 
++      unsigned int element_idx = ub_array->array_elements[j];
+       /* Append the subscript to the current variable name */
+-      ralloc_asprintf_rewrite_tail(name, &new_length, "[%u]",
+-                                   ub_array->array_elements[j]);
++      ralloc_asprintf_rewrite_tail(name, &new_length, "[%u]", element_idx);
+ 
+       if (ub_array->array) {
++         unsigned boffset = binding_offset + (element_idx *
++                            ub_array->array->total_num_array_elements);
+          process_block_array(ub_array->array, name, new_length, blocks,
+                              parcel, variables, b, block_index,
+-                             binding_offset, ctx, prog, first_index);
++                             boffset, ctx, prog, first_index);
+       } else {
++         unsigned boffset = binding_offset + element_idx;
+          process_block_array_leaf(*name, blocks,
+                                   parcel, variables, b, block_index,
+-                                  binding_offset, *block_index - first_index,
++                                  boffset, *block_index - first_index,
+                                   ctx, prog);
+       }
+    }
+@@ -266,7 +269,7 @@ process_block_array_leaf(const char *name,
+                          gl_uniform_block *blocks,
+                          ubo_visitor *parcel, gl_uniform_buffer_variable *variables,
+                          const struct link_uniform_block_active *const b,
+-                         unsigned *block_index, unsigned *binding_offset,
++                         unsigned *block_index, unsigned binding_offset,
+                          unsigned linearized_index,
+                          struct gl_context *ctx, struct gl_shader_program *prog)
+ {
+@@ -283,7 +286,7 @@ process_block_array_leaf(const char *name,
+     *    block binding and each subsequent element takes the next consecutive
+     *    uniform block binding point.
+     */
+-   blocks[i].Binding = (b->has_binding) ? b->binding + *binding_offset : 0;
++   blocks[i].Binding = (b->has_binding) ? b->binding + binding_offset : 0;
+ 
+    blocks[i].UniformBufferSize = 0;
+    blocks[i]._Packing = glsl_interface_packing(type->interface_packing);
+@@ -307,7 +310,6 @@ process_block_array_leaf(const char *name,
+       (unsigned)(ptrdiff_t)(&variables[parcel->index] - blocks[i].Uniforms);
+ 
+    *block_index = *block_index + 1;
+-   *binding_offset = *binding_offset + 1;
+ }
+ 
+ /* This function resizes the array types of the block so that later we can use
+@@ -370,7 +372,6 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
+       if ((create_ubo_blocks && !b->is_shader_storage) ||
+           (!create_ubo_blocks && b->is_shader_storage)) {
+ 
+-         unsigned binding_offset = 0;
+          if (b->array != NULL) {
+             char *name = ralloc_strdup(NULL,
+                                        block_type->without_array()->name);
+@@ -378,12 +379,12 @@ create_buffer_blocks(void *mem_ctx, struct gl_context *ctx,
+ 
+             assert(b->has_instance_name);
+             process_block_array(b->array, &name, name_length, blocks, &parcel,
+-                                variables, b, &i, &binding_offset, ctx, prog,
++                                variables, b, &i, 0, ctx, prog,
+                                 i);
+             ralloc_free(name);
+          } else {
+             process_block_array_leaf(block_type->name, blocks, &parcel,
+-                                     variables, b, &i, &binding_offset,
++                                     variables, b, &i, 0,
+                                      0, ctx, prog);
+          }
+       }
+-- 
+2.17.1
+

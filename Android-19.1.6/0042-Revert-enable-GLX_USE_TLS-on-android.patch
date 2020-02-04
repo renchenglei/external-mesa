@@ -1,0 +1,62 @@
+From 7b2c7519fa962079b1f4402b762b39952774e84f Mon Sep 17 00:00:00 2001
+From: renchenglei <chenglei.ren@intel.com>
+Date: Wed, 25 Dec 2019 22:15:06 +0800
+Subject: [PATCH 42/42] Revert "enable GLX_USE_TLS on android"
+
+This reverts commit 63f47da0a68324eed446dcc53717809a87047881.
+---
+ Android.common.mk      | 2 --
+ src/mapi/Android.mk    | 1 -
+ src/mapi/glapi/glapi.h | 4 ++--
+ 3 files changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/Android.common.mk b/Android.common.mk
+index f20faa828450..d92294d90339 100644
+--- a/Android.common.mk
++++ b/Android.common.mk
+@@ -69,7 +69,6 @@ LOCAL_CFLAGS += \
+ 	-DHAVE___BUILTIN_CLZLL \
+ 	-DHAVE___BUILTIN_UNREACHABLE \
+ 	-DHAVE_PTHREAD=1 \
+-	-DGLX_USE_TLS \
+ 	-DHAVE_DLADDR \
+ 	-DHAVE_DL_ITERATE_PHDR \
+ 	-DHAVE_LINUX_FUTEX_H \
+@@ -88,7 +87,6 @@ LOCAL_CFLAGS += \
+ 	-Wno-enum-conversion
+ 
+ LOCAL_CPPFLAGS += \
+-	-DGLX_USE_TLS \
+ 	-D__STDC_CONSTANT_MACROS \
+ 	-D__STDC_FORMAT_MACROS \
+ 	-D__STDC_LIMIT_MACROS \
+diff --git a/src/mapi/Android.mk b/src/mapi/Android.mk
+index 2a9d8d85d6b4..06a764700994 100644
+--- a/src/mapi/Android.mk
++++ b/src/mapi/Android.mk
+@@ -44,7 +44,6 @@ LOCAL_SRC_FILES := \
+ 	u_execmem.c
+ 
+ LOCAL_CFLAGS := \
+-	-DGLX_USE_TLS \
+ 	-DMAPI_MODE_GLAPI \
+ 	-DMAPI_ABI_HEADER=\"$(abi_header)\"
+ 
+diff --git a/src/mapi/glapi/glapi.h b/src/mapi/glapi/glapi.h
+index 2ce77456ffd8..d5d4e0a03a66 100644
+--- a/src/mapi/glapi/glapi.h
++++ b/src/mapi/glapi/glapi.h
+@@ -97,8 +97,8 @@ _GLAPI_EXPORT extern __thread void * _glapi_tls_Context
+ _GLAPI_EXPORT extern const struct _glapi_table *_glapi_Dispatch;
+ _GLAPI_EXPORT extern const void *_glapi_Context;
+ 
+-# define GET_DISPATCH() _glapi_get_dispatch()
+-# define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) _glapi_get_context()
++# define GET_DISPATCH() _glapi_tls_Dispatch
++# define GET_CURRENT_CONTEXT(C)  struct gl_context *C = (struct gl_context *) _glapi_tls_Context
+ 
+ #else
+ 
+-- 
+2.17.1
+
